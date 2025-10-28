@@ -1,12 +1,22 @@
 import os
 import cv2
-import moviepy.editor as mp
 import google.generativeai as genai
 import speech_recognition as sr
 import subprocess
 from PIL import Image
 
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+def extract_audio_ffmpeg(video_path, audio_path):
+    # Extract audio from video using ffmpeg (.m4a format, AAC codec)
+    command = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-vn",  # no video
+        "-acodec", "aac",
+        audio_path
+    ]
+    subprocess.run(command, check=True)
 
 def convert_to_wav(input_path, output_path):
     command = [
@@ -58,9 +68,8 @@ def analyze_video_with_gemini(video_path):
     audio_m4a = f"{base_name}_audio.m4a"
     audio_wav = f"{base_name}_audio.wav"
 
-    # 1. Extract audio from video
-    video_clip = mp.VideoFileClip(video_path)
-    video_clip.audio.write_audiofile(audio_m4a, codec='aac')
+    # 1. Extract audio from video using ffmpeg
+    extract_audio_ffmpeg(video_path, audio_m4a)
 
     # 2. Convert M4A → WAV (PCM)
     convert_to_wav(audio_m4a, audio_wav)
