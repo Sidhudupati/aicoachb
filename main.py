@@ -19,8 +19,9 @@ def analyze_video():
 
         print(f"📹 Received video: {video_path}")
 
-        result = analyze_video_with_gemini(video_path)
-        return jsonify({"analysis": result})
+        analysis, transcript = analyze_video_with_gemini(video_path)
+        return jsonify({"analysis": analysis, "transcription": transcript})
+
     except Exception as e:
         print("❌ Error occurred:")
         traceback.print_exc()

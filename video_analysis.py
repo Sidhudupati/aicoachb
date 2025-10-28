@@ -1,33 +1,44 @@
-# video_analysis.py
-
 import os
 import cv2
 import moviepy.editor as mp
 import google.generativeai as genai
+import speech_recognition as sr
+import subprocess
+from PIL import Image
 
-# Remove this line! It's not needed here:
-# app = Flask(__name__)
-# CORS(app)  # also remove
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-def analyze_video_with_gemini(video_path):
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+def convert_to_wav(input_path, output_path):
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i", input_path,
+        "-acodec", "pcm_s16le",
+        "-ar", "16000",
+        output_path
+    ]
+    subprocess.run(command, check=True)
 
-    # Extract audio
-    base_name, _ = os.path.splitext(video_path)
-    audio_path = f"{base_name}_audio.m4a"
-    video_clip = mp.VideoFileClip(video_path)
-    video_clip.audio.write_audiofile(audio_path, codec='aac')
+def transcribe_audio(audio_path):
+    recognizer = sr.Recognizer()
+    with sr.AudioFile(audio_path) as source:
+        audio = recognizer.record(source)
+    try:
+        transcript = recognizer.recognize_google(audio)
+    except Exception as e:
+        transcript = ""
+        print(f"Transcription error: {e}")
+    return transcript
 
-    # Extract frames every 5 seconds
+def extract_frames(video_path, interval_sec=5, max_frames=5):
     os.makedirs("frames", exist_ok=True)
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    interval = 5
-    frame_paths = []
     frame_number = 0
-    while True:
-        timestamp = frame_number * interval
+    frames = []
+    while frame_number < max_frames:
+        timestamp = frame_number * interval_sec
         frame_id = int(timestamp * fps)
         if frame_id >= frame_count:
             break
@@ -37,20 +48,53 @@ def analyze_video_with_gemini(video_path):
             break
         frame_path = f"frames/frame_{frame_number+1}.jpg"
         cv2.imwrite(frame_path, frame)
-        frame_paths.append(frame_path)
+        frames.append(Image.open(frame_path))  # PIL Image
         frame_number += 1
     cap.release()
+    return frames
 
-    # Upload files to Gemini
-    uploaded_audio = genai.upload_file(path=audio_path)
-    uploaded_frames = [genai.upload_file(path=path) for path in frame_paths]
+def analyze_video_with_gemini(video_path):
+    base_name, _ = os.path.splitext(video_path)
+    audio_m4a = f"{base_name}_audio.m4a"
+    audio_wav = f"{base_name}_audio.wav"
 
-    # Multimodal analysis
-    prompt = """Analyze this interview video using both audio and visual information.
-Audio: transcription, tone, pace, confidence
-Visual: facial expressions, posture, eye contact, engagement
-Output: summary, strengths, improvements, score 1-10"""
+    # 1. Extract audio from video
+    video_clip = mp.VideoFileClip(video_path)
+    video_clip.audio.write_audiofile(audio_m4a, codec='aac')
 
+    # 2. Convert M4A → WAV (PCM)
+    convert_to_wav(audio_m4a, audio_wav)
+
+    # 3. Transcribe WAV audio
+    transcript = transcribe_audio(audio_wav)
+
+    # If no speech or transcript is very short, return custom response
+    if not transcript or len(transcript.split()) < 3:
+        analysis_text = (
+            "No meaningful speech detected. "
+            "Please try the interview again for a proper analysis. "
+            "The system did not detect spoken input in your video, so no confidence or overall score could be assigned."
+        )
+        return analysis_text, transcript
+
+    # 4. Extract frames as PIL Images
+    pil_frames = extract_frames(video_path)
+
+    # 5. Prepare prompt
+    prompt = f"""
+Analyze this interview video using both audio and visual information.
+
+Audio (transcription): {transcript}
+Visual: facial expressions, posture, eye contact, engagement.
+Output:
+- Summary
+- Strengths
+- Improvements
+- Confidence Score: (Write only as: Confidence Score: X/10)
+- Overall Score: (Write only as: Overall Score: X/10)
+
+If no speech is detected, return 'Confidence Score: 0/10' and 'Overall Score: 0/10'.
+"""
     model = genai.GenerativeModel("gemini-2.0-flash-exp")
-    response = model.generate_content([prompt, uploaded_audio, *uploaded_frames])
-    return response.text
+    response = model.generate_content([prompt, *pil_frames])
+    return response.text, transcript
