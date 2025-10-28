@@ -9,3 +9,5 @@ Pillow>=10.0.0
 opencv-python
 SpeechRecognition
 pydub
+packaging
+
